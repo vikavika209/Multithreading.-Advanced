@@ -1,11 +1,5 @@
 package com.edu.imageconversion.services;
 
-import org.apache.batik.anim.dom.SAXSVGDocumentFactory;
-import org.apache.batik.transcoder.TranscoderException;
-import org.apache.batik.transcoder.TranscoderInput;
-import org.apache.batik.transcoder.TranscoderOutput;
-import org.apache.batik.transcoder.svg2svg.SVGTranscoder;
-import org.apache.batik.util.XMLResourceDescriptor;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -16,12 +10,19 @@ import javax.imageio.ImageWriter;
 import javax.imageio.stream.ImageOutputStream;
 import java.awt.*;
 import java.awt.image.BufferedImage;
-import java.io.*;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
 
 @Service
 public class ImageProcessingService {
+    private final SvgOptimizationService svgOptimizationService;
+
+    public ImageProcessingService(SvgOptimizationService svgOptimizationService) {
+        this.svgOptimizationService = svgOptimizationService;
+    }
 
     private Color findBackgroundColor(BufferedImage image) {
         int width = image.getWidth();
@@ -87,48 +88,48 @@ public class ImageProcessingService {
                 .append("'>");
 
         for (int y = 0; y < image.getHeight(); y++) {
+            int previousColor = -1;
+            int startX = 0;
+
             for (int x = 0; x < image.getWidth(); x++) {
-                int rgb = image.getRGB(x, y);
-                int alpha = (rgb >> 24) & 0xff;
-                if (alpha == 0) {
-                    continue; // Skip transparent pixels
+                int currentColor = image.getRGB(x, y);
+                if (currentColor != previousColor) {
+                    if (x > startX && previousColor != -1) {
+                        addRect(svgBuilder, startX, y, x - startX, previousColor);
+                    }
+                    previousColor = currentColor;
+                    startX = x;
                 }
-                String hex = String.format("#%02x%02x%02x",
-                        (rgb >> 16) & 0xff, // Red
-                        (rgb >> 8) & 0xff,  // Green
-                        (rgb) & 0xff);      // Blue
-                svgBuilder.append("<rect x='")
-                        .append(x)
-                        .append("' y='")
-                        .append(y)
-                        .append("' width='1' height='1' fill='")
-                        .append(hex)
-                        .append("'/>");
+            }
+
+            // Adding last segment
+            if (previousColor != -1 && startX < image.getWidth()) {
+                addRect(svgBuilder, startX, y, image.getWidth() - startX, previousColor);
             }
         }
 
         svgBuilder.append("</svg>");
-        return svgBuilder.toString().getBytes();
+        return svgBuilder.toString().getBytes(StandardCharsets.UTF_8);
     }
 
-    private byte[] optimizeSvg(byte[] svgBytes) throws IOException, TranscoderException {
-        String parser = XMLResourceDescriptor.getXMLParserClassName();
-        SAXSVGDocumentFactory factory = new SAXSVGDocumentFactory(parser);
-        String uri = "http://www.w3.org/2000/svg";
-        org.w3c.dom.Document svgDocument = factory.createDocument(uri, new ByteArrayInputStream(svgBytes));
-
-        ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
-        OutputStreamWriter outputStreamWriter = new OutputStreamWriter(byteArrayOutputStream, "UTF-8");
-
-        TranscoderInput input = new TranscoderInput(svgDocument);
-        TranscoderOutput output = new TranscoderOutput(outputStreamWriter);
-
-        SVGTranscoder transcoder = new SVGTranscoder();
-        transcoder.transcode(input, output);
-
-        outputStreamWriter.flush();
-        outputStreamWriter.close();
-        return byteArrayOutputStream.toByteArray();
+    private void addRect(StringBuilder svgBuilder, int x, int y, int width, int color) {
+        int alpha = (color >> 24) & 0xff;
+        if (alpha == 0) {
+            return; // Skip transparent pixels
+        }
+        String hex = String.format("#%02x%02x%02x",
+                (color >> 16) & 0xff, // Red
+                (color >> 8) & 0xff,  // Green
+                (color) & 0xff);      // Blue
+        svgBuilder.append("<rect x='")
+                .append(x)
+                .append("' y='")
+                .append(y)
+                .append("' width='")
+                .append(width)
+                .append("' height='1' fill='")
+                .append(hex)
+                .append("'/>");
     }
 
     private byte[] bufferedImageToByteArray(BufferedImage image, String format, float quality) throws IOException {
@@ -154,7 +155,7 @@ public class ImageProcessingService {
         return byteArrayOutputStream.toByteArray();
     }
 
-    public byte[] convertImage(MultipartFile file, String format, float quality) throws IOException, TranscoderException {
+    public byte[] convertImage(MultipartFile file, String format, float quality) throws IOException {
         BufferedImage inputImage = ImageIO.read(file.getInputStream());
         if (inputImage == null) {
             throw new IOException("Could not open or find the image");
@@ -164,7 +165,11 @@ public class ImageProcessingService {
 
         if ("svg".equalsIgnoreCase(format)) {
             byte[] svgBytes = bufferedImageToSvg(result);
-            return optimizeSvg(svgBytes);
+            try {
+                return svgOptimizationService.optimizeSvg(svgBytes);
+            } catch (Exception e) {
+                throw new IOException("SVG optimization failed", e);
+            }
         }
 
         return bufferedImageToByteArray(result, format, quality);

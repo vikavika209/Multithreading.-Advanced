@@ -55,7 +55,7 @@ public class ImageProcessingController {
             return ResponseEntity.ok()
                     .headers(headers)
                     .body(result);
-        } catch (IOException | TranscoderException e) {
+        } catch (IOException e) {
             e.printStackTrace();
             return new ResponseEntity<>(HttpStatus.INTERNAL_SERVER_ERROR);
         }
