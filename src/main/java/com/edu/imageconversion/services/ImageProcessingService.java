@@ -1,13 +1,22 @@
 package com.edu.imageconversion.services;
 
+import org.apache.batik.anim.dom.SAXSVGDocumentFactory;
+import org.apache.batik.transcoder.TranscoderException;
+import org.apache.batik.transcoder.TranscoderInput;
+import org.apache.batik.transcoder.TranscoderOutput;
+import org.apache.batik.transcoder.svg2svg.SVGTranscoder;
+import org.apache.batik.util.XMLResourceDescriptor;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
+import javax.imageio.IIOImage;
 import javax.imageio.ImageIO;
+import javax.imageio.ImageWriteParam;
+import javax.imageio.ImageWriter;
+import javax.imageio.stream.ImageOutputStream;
 import java.awt.*;
 import java.awt.image.BufferedImage;
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
+import java.io.*;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -70,7 +79,6 @@ public class ImageProcessingService {
     }
 
     private byte[] bufferedImageToSvg(BufferedImage image) throws IOException {
-        // Простейшая реализация конвертации в SVG, для качественной векторизации лучше использовать специализированные библиотеки
         StringBuilder svgBuilder = new StringBuilder();
         svgBuilder.append("<svg xmlns='http://www.w3.org/2000/svg' width='")
                 .append(image.getWidth())
@@ -103,14 +111,50 @@ public class ImageProcessingService {
         return svgBuilder.toString().getBytes();
     }
 
-    private byte[] bufferedImageToByteArray(BufferedImage image, String format) throws IOException {
+    private byte[] optimizeSvg(byte[] svgBytes) throws IOException, TranscoderException {
+        String parser = XMLResourceDescriptor.getXMLParserClassName();
+        SAXSVGDocumentFactory factory = new SAXSVGDocumentFactory(parser);
+        String uri = "http://www.w3.org/2000/svg";
+        org.w3c.dom.Document svgDocument = factory.createDocument(uri, new ByteArrayInputStream(svgBytes));
+
         ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
-        ImageIO.write(image, format, byteArrayOutputStream);
+        OutputStreamWriter outputStreamWriter = new OutputStreamWriter(byteArrayOutputStream, "UTF-8");
+
+        TranscoderInput input = new TranscoderInput(svgDocument);
+        TranscoderOutput output = new TranscoderOutput(outputStreamWriter);
+
+        SVGTranscoder transcoder = new SVGTranscoder();
+        transcoder.transcode(input, output);
+
+        outputStreamWriter.flush();
+        outputStreamWriter.close();
         return byteArrayOutputStream.toByteArray();
     }
 
-    // Метод для конвертации изображения
-    public byte[] convertImage(MultipartFile file, String format) throws IOException {
+    private byte[] bufferedImageToByteArray(BufferedImage image, String format, float quality) throws IOException {
+        ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
+
+        if ("jpeg".equalsIgnoreCase(format) || "jpg".equalsIgnoreCase(format)) {
+            ImageWriter jpegWriter = ImageIO.getImageWritersByFormatName("jpeg").next();
+            ImageWriteParam jpegWriteParam = jpegWriter.getDefaultWriteParam();
+            if (jpegWriteParam.canWriteCompressed()) {
+                jpegWriteParam.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
+                jpegWriteParam.setCompressionQuality(quality);
+            }
+
+            try (ImageOutputStream imageOutputStream = ImageIO.createImageOutputStream(byteArrayOutputStream)) {
+                jpegWriter.setOutput(imageOutputStream);
+                jpegWriter.write(null, new IIOImage(image, null, null), jpegWriteParam);
+                jpegWriter.dispose();
+            }
+        } else if ("png".equalsIgnoreCase(format)) {
+            ImageIO.write(image, format, byteArrayOutputStream);
+        }
+
+        return byteArrayOutputStream.toByteArray();
+    }
+
+    public byte[] convertImage(MultipartFile file, String format, float quality) throws IOException, TranscoderException {
         BufferedImage inputImage = ImageIO.read(file.getInputStream());
         if (inputImage == null) {
             throw new IOException("Could not open or find the image");
@@ -119,9 +163,10 @@ public class ImageProcessingService {
         BufferedImage result = removeBackground(inputImage);
 
         if ("svg".equalsIgnoreCase(format)) {
-            return bufferedImageToSvg(result);
+            byte[] svgBytes = bufferedImageToSvg(result);
+            return optimizeSvg(svgBytes);
         }
 
-        return bufferedImageToByteArray(result, "png");
+        return bufferedImageToByteArray(result, format, quality);
     }
 }

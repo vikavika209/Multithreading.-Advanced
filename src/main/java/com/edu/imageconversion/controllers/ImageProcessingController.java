@@ -10,8 +10,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
-
 import java.io.IOException;
+import org.apache.batik.transcoder.TranscoderException;
 
 @RestController
 @RequestMapping("/api/image")
@@ -39,17 +39,15 @@ public class ImageProcessingController {
     @PostMapping(value = "/convert", consumes = {"multipart/form-data"})
     public ResponseEntity<byte[]> convertImage(
             @RequestParam("file") MultipartFile file,
-            @RequestParam("format") String format) {
+            @RequestParam("format") String format,
+            @RequestParam(value = "quality", defaultValue = "0.8") float quality) {
         try {
-            // Проверяем чтобы формат был либо PNG, либо SVG
             if (!format.equalsIgnoreCase("png") && !format.equalsIgnoreCase("svg")) {
                 return new ResponseEntity<>(HttpStatus.BAD_REQUEST);
             }
 
-            // Конвертируем изображение
-            byte[] result = imageProcessingService.convertImage(file, format);
+            byte[] result = imageProcessingService.convertImage(file, format, quality);
 
-            // Устанавливаем правильное расширение файла в заголовке Content-Disposition
             String filename = "converted_image." + format.toLowerCase();
             HttpHeaders headers = new HttpHeaders();
             headers.add(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=" + filename);
@@ -57,7 +55,7 @@ public class ImageProcessingController {
             return ResponseEntity.ok()
                     .headers(headers)
                     .body(result);
-        } catch (IOException e) {
+        } catch (IOException | TranscoderException e) {
             e.printStackTrace();
             return new ResponseEntity<>(HttpStatus.INTERNAL_SERVER_ERROR);
         }
