@@ -24,12 +24,12 @@ public class ImageProcessingService {
         this.svgOptimizationService = svgOptimizationService;
     }
 
-    private Color findBackgroundColor(BufferedImage image) {
+    private Map<Color, Integer> findBackgroundColors(BufferedImage image) {
         int width = image.getWidth();
         int height = image.getHeight();
         Map<Color, Integer> colorCount = new HashMap<>();
 
-        int margin = 5;
+        int margin = Math.min(width, height) / 10; // Для анализа 10% от краев изображения
         for (int y = 0; y < margin; y++) {
             for (int x = 0; x < margin; x++) {
                 addColorCount(colorCount, new Color(image.getRGB(x, y)));
@@ -39,14 +39,23 @@ public class ImageProcessingService {
             }
         }
 
-        return colorCount.entrySet().stream()
-                .max(Map.Entry.comparingByValue())
-                .map(Map.Entry::getKey)
-                .orElse(Color.WHITE);
+        return colorCount;
     }
 
     private void addColorCount(Map<Color, Integer> colorCount, Color color) {
         colorCount.put(color, colorCount.getOrDefault(color, 0) + 1);
+    }
+
+    private boolean isBackgroundColor(Color color, Color[] bgColors, int tolerance) {
+        for (Color bgColor : bgColors) {
+            int rDiff = Math.abs(color.getRed() - bgColor.getRed());
+            int gDiff = Math.abs(color.getGreen() - bgColor.getGreen());
+            int bDiff = Math.abs(color.getBlue() - bgColor.getBlue());
+            if (rDiff < tolerance && gDiff < tolerance && bDiff < tolerance) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private BufferedImage removeBackground(BufferedImage source) throws IOException {
@@ -54,7 +63,14 @@ public class ImageProcessingService {
         int height = source.getHeight();
         BufferedImage outputImage = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
 
-        Color backgroundColor = findBackgroundColor(source);
+        Map<Color, Integer> backgroundColorsMap = findBackgroundColors(source);
+        // Найдем два самых доминирующих цвета
+        Color[] backgroundColors = backgroundColorsMap.entrySet().stream()
+                .sorted((e1, e2) -> e2.getValue().compareTo(e1.getValue()))
+                .limit(2)
+                .map(Map.Entry::getKey)
+                .toArray(Color[]::new);
+
         int tolerance = 30;
 
         for (int y = 0; y < height; y++) {
@@ -62,7 +78,7 @@ public class ImageProcessingService {
                 int rgb = source.getRGB(x, y);
                 Color color = new Color(rgb, true);
 
-                if (isBackground(color, backgroundColor, tolerance)) {
+                if (isBackgroundColor(color, backgroundColors, tolerance)) {
                     outputImage.setRGB(x, y, 0x00FFFFFF);
                 } else {
                     outputImage.setRGB(x, y, rgb);
@@ -70,13 +86,6 @@ public class ImageProcessingService {
             }
         }
         return outputImage;
-    }
-
-    private boolean isBackground(Color color, Color backgroundColor, int tolerance) {
-        int rDiff = Math.abs(color.getRed() - backgroundColor.getRed());
-        int gDiff = Math.abs(color.getGreen() - backgroundColor.getGreen());
-        int bDiff = Math.abs(color.getBlue() - backgroundColor.getBlue());
-        return rDiff < tolerance && gDiff < tolerance && bDiff < tolerance;
     }
 
     private byte[] bufferedImageToSvg(BufferedImage image) throws IOException {
@@ -87,49 +96,83 @@ public class ImageProcessingService {
                 .append(image.getHeight())
                 .append("'>");
 
-        for (int y = 0; y < image.getHeight(); y++) {
-            int previousColor = -1;
-            int startX = 0;
+        Map<Color, StringBuilder> colorToPathsMap = new HashMap<>();
 
+        boolean[][] visited = new boolean[image.getWidth()][image.getHeight()];
+
+        for (int y = 0; y < image.getHeight(); y++) {
             for (int x = 0; x < image.getWidth(); x++) {
-                int currentColor = image.getRGB(x, y);
-                if (currentColor != previousColor) {
-                    if (x > startX && previousColor != -1) {
-                        addRect(svgBuilder, startX, y, x - startX, previousColor);
+                if (!visited[x][y]) {
+                    int color = image.getRGB(x, y);
+                    if ((color >> 24) == 0x00) {
+                        // Skip transparent pixels
+                        visited[x][y] = true;
+                        continue;
                     }
-                    previousColor = currentColor;
-                    startX = x;
+
+                    Color keyColor = new Color(color, true);
+                    StringBuilder path = colorToPathsMap.computeIfAbsent(keyColor, k -> new StringBuilder());
+
+                    int height = 1;
+                    int width = 1;
+
+                    // Find the width of the block
+                    for (int wx = x + 1; wx < image.getWidth() && image.getRGB(wx, y) == color; wx++) {
+                        visited[wx][y] = true;
+                        width++;
+                    }
+
+                    // Check vertically
+                    boolean expandHeight = true;
+                    while (expandHeight && (y + height) < image.getHeight()) {
+                        for (int wx = x; wx < x + width; wx++) {
+                            if (image.getRGB(wx, y + height) != color) {
+                                expandHeight = false;
+                                break;
+                            }
+                        }
+
+                        if (expandHeight) {
+                            for (int wx = x; wx < x + width; wx++) {
+                                visited[wx][y + height] = true;
+                            }
+                            height++;
+                        }
+                    }
+
+                    addPath(path, x, y, width, height);
                 }
             }
-
-            // Adding last segment
-            if (previousColor != -1 && startX < image.getWidth()) {
-                addRect(svgBuilder, startX, y, image.getWidth() - startX, previousColor);
-            }
         }
+
+        colorToPathsMap.forEach((color, path) -> {
+            String hex = String.format("#%02x%02x%02x",
+                    color.getRed(),
+                    color.getGreen(),
+                    color.getBlue());
+            svgBuilder.append("<path fill='")
+                    .append(hex)
+                    .append("' d='")
+                    .append(path)
+                    .append("'/>");
+        });
 
         svgBuilder.append("</svg>");
         return svgBuilder.toString().getBytes(StandardCharsets.UTF_8);
     }
 
-    private void addRect(StringBuilder svgBuilder, int x, int y, int width, int color) {
-        int alpha = (color >> 24) & 0xff;
-        if (alpha == 0) {
-            return; // Skip transparent pixels
-        }
-        String hex = String.format("#%02x%02x%02x",
-                (color >> 16) & 0xff, // Red
-                (color >> 8) & 0xff,  // Green
-                (color) & 0xff);      // Blue
-        svgBuilder.append("<rect x='")
+    private void addPath(StringBuilder pathBuilder, int x, int y, int width, int height) {
+        pathBuilder.append("M")
                 .append(x)
-                .append("' y='")
+                .append(",")
                 .append(y)
-                .append("' width='")
+                .append("h")
                 .append(width)
-                .append("' height='1' fill='")
-                .append(hex)
-                .append("'/>");
+                .append("v")
+                .append(height)
+                .append("h")
+                .append(-width)
+                .append("z");
     }
 
     private byte[] bufferedImageToByteArray(BufferedImage image, String format, float quality) throws IOException {
@@ -155,23 +198,27 @@ public class ImageProcessingService {
         return byteArrayOutputStream.toByteArray();
     }
 
-    public byte[] convertImage(MultipartFile file, String format, float quality) throws IOException {
-        BufferedImage inputImage = ImageIO.read(file.getInputStream());
-        if (inputImage == null) {
-            throw new IOException("Could not open or find the image");
-        }
+    public byte[][] convertImages(MultipartFile[] files, String format, float quality) throws IOException {
+        byte[][] results = new byte[files.length][];
+        for (int i = 0; i < files.length; i++) {
+            BufferedImage inputImage = ImageIO.read(files[i].getInputStream());
+            if (inputImage == null) {
+                throw new IOException("Could not open or find the image at index " + i);
+            }
 
-        BufferedImage result = removeBackground(inputImage);
+            BufferedImage result = removeBackground(inputImage);
 
-        if ("svg".equalsIgnoreCase(format)) {
-            byte[] svgBytes = bufferedImageToSvg(result);
-            try {
-                return svgOptimizationService.optimizeSvg(svgBytes);
-            } catch (Exception e) {
-                throw new IOException("SVG optimization failed", e);
+            if ("svg".equalsIgnoreCase(format)) {
+                byte[] svgBytes = bufferedImageToSvg(result);
+                try {
+                    results[i] = svgOptimizationService.optimizeSvg(svgBytes);
+                } catch (Exception e) {
+                    throw new IOException("SVG optimization failed for image at index " + i, e);
+                }
+            } else {
+                results[i] = bufferedImageToByteArray(result, format, quality);
             }
         }
-
-        return bufferedImageToByteArray(result, format, quality);
+        return results;
     }
 }
