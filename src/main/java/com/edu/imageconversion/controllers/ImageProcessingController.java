@@ -1,6 +1,7 @@
 package com.edu.imageconversion.controllers;
 
 import com.edu.imageconversion.services.ImageProcessingService;
+import com.edu.imageconversion.services.ZipService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
@@ -10,18 +11,18 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
-import java.io.ByteArrayOutputStream;
+
 import java.io.IOException;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipOutputStream;
 
 @RestController
 @RequestMapping("/api/image")
 public class ImageProcessingController {
     private final ImageProcessingService imageProcessingService;
+    private final ZipService zipService;
 
-    public ImageProcessingController(ImageProcessingService imageProcessingService) {
+    public ImageProcessingController(ImageProcessingService imageProcessingService, ZipService zipService) {
         this.imageProcessingService = imageProcessingService;
+        this.zipService = zipService;
     }
 
     @Operation(summary = "Convert images", description = "Convert uploaded images to PNG or SVG and remove background")
@@ -41,18 +42,7 @@ public class ImageProcessingController {
             }
 
             byte[][] convertedImages = imageProcessingService.convertImages(files, format, quality);
-
-            ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
-            try (ZipOutputStream zipOutputStream = new ZipOutputStream(byteArrayOutputStream)) {
-                for (int i = 0; i < convertedImages.length; i++) {
-                    ZipEntry zipEntry = new ZipEntry("image" + (i + 1) + "." + format);
-                    zipOutputStream.putNextEntry(zipEntry);
-                    zipOutputStream.write(convertedImages[i]);
-                    zipOutputStream.closeEntry();
-                }
-            }
-
-            byte[] zipData = byteArrayOutputStream.toByteArray();
+            byte[] zipData = zipService.zipFiles(convertedImages, format);
 
             HttpHeaders headers = new HttpHeaders();
             headers.add(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=converted_images.zip");
