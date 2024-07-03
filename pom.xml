@@ -9,7 +9,7 @@
         <relativePath/>
     </parent>
     <groupId>com.edu</groupId>
-    <artifactId>web-scrape</artifactId>
+    <artifactId>web-image-conversion</artifactId>
     <version>0.0.1-SNAPSHOT</version>
     <name>web-scrape</name>
     <description>Demo project for Spring Boot</description>
@@ -78,11 +78,6 @@
         <dependency>
             <groupId>org.apache.xmlgraphics</groupId>
             <artifactId>batik-transcoder</artifactId>
-            <version>1.14</version>
-        </dependency>
-        <dependency>
-            <groupId>org.apache.xmlgraphics</groupId>
-            <artifactId>batik-dom</artifactId>
             <version>1.14</version>
         </dependency>
         <dependency>
