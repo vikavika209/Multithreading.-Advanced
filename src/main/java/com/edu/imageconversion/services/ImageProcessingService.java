@@ -2,7 +2,6 @@ package com.edu.imageconversion.services;
 
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
-
 import javax.imageio.IIOImage;
 import javax.imageio.ImageIO;
 import javax.imageio.ImageWriteParam;
@@ -12,11 +11,14 @@ import java.awt.*;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.StringWriter;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
-import java.util.LinkedList;
 import java.util.Map;
-import java.util.Queue;
+import org.apache.batik.svggen.SVGGraphics2D;
+import org.apache.batik.dom.GenericDOMImplementation;
+import org.w3c.dom.DOMImplementation;
+import org.w3c.dom.Document;
 
 @Service
 public class ImageProcessingService {
@@ -26,12 +28,11 @@ public class ImageProcessingService {
         this.svgOptimizationService = svgOptimizationService;
     }
 
-    private Map<Color, Integer> findBackgroundColors(BufferedImage image) {
+    private Color findDominantColor(BufferedImage image, int margin) {
         int width = image.getWidth();
         int height = image.getHeight();
         Map<Color, Integer> colorCount = new HashMap<>();
 
-        int margin = Math.min(width, height) / 10; // Для анализа 10% от краев изображения
         for (int y = 0; y < margin; y++) {
             for (int x = 0; x < margin; x++) {
                 addColorCount(colorCount, new Color(image.getRGB(x, y)));
@@ -40,24 +41,21 @@ public class ImageProcessingService {
                 addColorCount(colorCount, new Color(image.getRGB(width - 1 - x, height - 1 - y)));
             }
         }
-
-        return colorCount;
+        return colorCount.entrySet().stream()
+                .max(Map.Entry.comparingByValue())
+                .map(Map.Entry::getKey)
+                .orElse(Color.WHITE);
     }
 
     private void addColorCount(Map<Color, Integer> colorCount, Color color) {
         colorCount.put(color, colorCount.getOrDefault(color, 0) + 1);
     }
 
-    private boolean isBackgroundColor(Color color, Color[] bgColors, int tolerance) {
-        for (Color bgColor : bgColors) {
-            int rDiff = Math.abs(color.getRed() - bgColor.getRed());
-            int gDiff = Math.abs(color.getGreen() - bgColor.getGreen());
-            int bDiff = Math.abs(color.getBlue() - bgColor.getBlue());
-            if (rDiff < tolerance && gDiff < tolerance && bDiff < tolerance) {
-                return true;
-            }
-        }
-        return false;
+    private boolean isBackgroundColor(Color color, Color bgColor, int tolerance) {
+        int rDiff = Math.abs(color.getRed() - bgColor.getRed());
+        int gDiff = Math.abs(color.getGreen() - bgColor.getGreen());
+        int bDiff = Math.abs(color.getBlue() - bgColor.getBlue());
+        return rDiff < tolerance && gDiff < tolerance && bDiff < tolerance;
     }
 
     private BufferedImage removeBackground(BufferedImage source) throws IOException {
@@ -65,14 +63,8 @@ public class ImageProcessingService {
         int height = source.getHeight();
         BufferedImage outputImage = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
 
-        Map<Color, Integer> backgroundColorsMap = findBackgroundColors(source);
-        // Найдем два самых доминирующих цвета
-        Color[] backgroundColors = backgroundColorsMap.entrySet().stream()
-                .sorted((e1, e2) -> e2.getValue().compareTo(e1.getValue()))
-                .limit(2)
-                .map(Map.Entry::getKey)
-                .toArray(Color[]::new);
-
+        int margin = Math.min(width, height) / 10;
+        Color backgroundColor = findDominantColor(source, margin);
         int tolerance = 30;
 
         for (int y = 0; y < height; y++) {
@@ -80,7 +72,7 @@ public class ImageProcessingService {
                 int rgb = source.getRGB(x, y);
                 Color color = new Color(rgb, true);
 
-                if (isBackgroundColor(color, backgroundColors, tolerance)) {
+                if (isBackgroundColor(color, backgroundColor, tolerance)) {
                     outputImage.setRGB(x, y, 0x00FFFFFF);
                 } else {
                     outputImage.setRGB(x, y, rgb);
@@ -91,87 +83,31 @@ public class ImageProcessingService {
     }
 
     private byte[] bufferedImageToSvg(BufferedImage image) throws IOException {
-        StringBuilder svgBuilder = new StringBuilder();
-        svgBuilder.append("<svg xmlns='http://www.w3.org/2000/svg' width='")
-                .append(image.getWidth())
-                .append("' height='")
-                .append(image.getHeight())
-                .append("'>");
+        int width = image.getWidth();
+        int height = image.getHeight();
 
-        Map<Color, StringBuilder> colorToPathsMap = new HashMap<>();
-        boolean[][] visited = new boolean[image.getWidth()][image.getHeight()];
+        // Создаем новый документ для SVG
+        DOMImplementation domImpl = GenericDOMImplementation.getDOMImplementation();
+        Document document = domImpl.createDocument(null, "svg", null);
 
-        for (int y = 0; y < image.getHeight(); y++) {
-            for (int x = 0; x < image.getWidth(); x++) {
-                if (!visited[x][y]) {
-                    int color = image.getRGB(x, y);
-                    if ((color >> 24) == 0x00) {
-                        // Skip transparent pixels
-                        visited[x][y] = true;
-                        continue;
-                    }
+        // Создаем SVGGraphics2D для рисования SVG
+        SVGGraphics2D svgGenerator = new SVGGraphics2D(document);
 
-                    Color keyColor = new Color(color, true);
-                    StringBuilder path = colorToPathsMap.computeIfAbsent(keyColor, k -> new StringBuilder());
+        // Рисуем изображение на SVGGraphics2D
+        svgGenerator.drawImage(image, 0, 0, null);
 
-                    // Find all contiguous pixels with the same color using BFS
-                    Queue<Point> queue = new LinkedList<>();
-                    queue.add(new Point(x, y));
-                    visited[x][y] = true;
+        // Получаем корневой элемент SVG и устанавливаем атрибуты
+        org.w3c.dom.Element root = svgGenerator.getRoot();
+        root.setAttributeNS(null, "width", String.valueOf(width));
+        root.setAttributeNS(null, "height", String.valueOf(height));
+        root.setAttributeNS(null, "viewBox", "0 0 " + width + " " + height);
 
-                    while (!queue.isEmpty()) {
-                        Point p = queue.poll();
-                        int cx = p.x;
-                        int cy = p.y;
+        // Генерация SVG контента в виде строки
+        StringWriter writer = new StringWriter();
+        svgGenerator.stream(root, writer);
 
-                        // Check and add all four neighboring pixels
-                        for (int[] offset : new int[][]{{1, 0}, {-1, 0}, {0, 1}, {0, -1}}) {
-                            int nx = cx + offset[0];
-                            int ny = cy + offset[1];
-
-                            if (0 <= nx && nx < image.getWidth() && 0 <= ny && ny < image.getHeight() && !visited[nx][ny]) {
-                                int neighborColor = image.getRGB(nx, ny);
-                                if (neighborColor == color) {
-                                    visited[nx][ny] = true;
-                                    queue.add(new Point(nx, ny));
-                                }
-                            }
-                        }
-
-                        addPath(path, cx, cy, 1, 1);
-                    }
-                }
-            }
-        }
-
-        colorToPathsMap.forEach((color, path) -> {
-            String hex = String.format("#%02x%02x%02x",
-                    color.getRed(),
-                    color.getGreen(),
-                    color.getBlue());
-            svgBuilder.append("<path fill='")
-                    .append(hex)
-                    .append("' d='")
-                    .append(path)
-                    .append("'/>");
-        });
-
-        svgBuilder.append("</svg>");
-        return svgBuilder.toString().getBytes(StandardCharsets.UTF_8);
-    }
-
-    private void addPath(StringBuilder pathBuilder, int x, int y, int width, int height) {
-        pathBuilder.append("M")
-                .append(x)
-                .append(",")
-                .append(y)
-                .append("h")
-                .append(width)
-                .append("v")
-                .append(height)
-                .append("h")
-                .append(-width)
-                .append("z");
+        // Конвертация строки в байты
+        return writer.toString().getBytes(StandardCharsets.UTF_8);
     }
 
     private byte[] bufferedImageToByteArray(BufferedImage image, String format, float quality) throws IOException {
@@ -205,7 +141,20 @@ public class ImageProcessingService {
                 throw new IOException("Could not open or find the image at index " + i);
             }
 
+            // Убедитесь, что размеры результирующего изображения совпадают с исходными
+            int width = inputImage.getWidth();
+            int height = inputImage.getHeight();
+
             BufferedImage result = removeBackground(inputImage);
+
+            // После удаления фона проверим, что размеры совпадают
+            if (result.getWidth() != width || result.getHeight() != height) {
+                BufferedImage correctedResult = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+                Graphics2D g = correctedResult.createGraphics();
+                g.drawImage(result, 0, 0, width, height, null);
+                g.dispose();
+                result = correctedResult;
+            }
 
             if ("svg".equalsIgnoreCase(format)) {
                 byte[] svgBytes = bufferedImageToSvg(result);
