@@ -14,7 +14,9 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
+import java.util.LinkedList;
 import java.util.Map;
+import java.util.Queue;
 
 @Service
 public class ImageProcessingService {
@@ -97,7 +99,6 @@ public class ImageProcessingService {
                 .append("'>");
 
         Map<Color, StringBuilder> colorToPathsMap = new HashMap<>();
-
         boolean[][] visited = new boolean[image.getWidth()][image.getHeight()];
 
         for (int y = 0; y < image.getHeight(); y++) {
@@ -113,34 +114,32 @@ public class ImageProcessingService {
                     Color keyColor = new Color(color, true);
                     StringBuilder path = colorToPathsMap.computeIfAbsent(keyColor, k -> new StringBuilder());
 
-                    int height = 1;
-                    int width = 1;
+                    // Find all contiguous pixels with the same color using BFS
+                    Queue<Point> queue = new LinkedList<>();
+                    queue.add(new Point(x, y));
+                    visited[x][y] = true;
 
-                    // Find the width of the block
-                    for (int wx = x + 1; wx < image.getWidth() && image.getRGB(wx, y) == color; wx++) {
-                        visited[wx][y] = true;
-                        width++;
-                    }
+                    while (!queue.isEmpty()) {
+                        Point p = queue.poll();
+                        int cx = p.x;
+                        int cy = p.y;
 
-                    // Check vertically
-                    boolean expandHeight = true;
-                    while (expandHeight && (y + height) < image.getHeight()) {
-                        for (int wx = x; wx < x + width; wx++) {
-                            if (image.getRGB(wx, y + height) != color) {
-                                expandHeight = false;
-                                break;
+                        // Check and add all four neighboring pixels
+                        for (int[] offset : new int[][]{{1, 0}, {-1, 0}, {0, 1}, {0, -1}}) {
+                            int nx = cx + offset[0];
+                            int ny = cy + offset[1];
+
+                            if (0 <= nx && nx < image.getWidth() && 0 <= ny && ny < image.getHeight() && !visited[nx][ny]) {
+                                int neighborColor = image.getRGB(nx, ny);
+                                if (neighborColor == color) {
+                                    visited[nx][ny] = true;
+                                    queue.add(new Point(nx, ny));
+                                }
                             }
                         }
 
-                        if (expandHeight) {
-                            for (int wx = x; wx < x + width; wx++) {
-                                visited[wx][y + height] = true;
-                            }
-                            height++;
-                        }
+                        addPath(path, cx, cy, 1, 1);
                     }
-
-                    addPath(path, x, y, width, height);
                 }
             }
         }

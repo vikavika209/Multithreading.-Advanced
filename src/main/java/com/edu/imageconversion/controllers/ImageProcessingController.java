@@ -1,10 +1,8 @@
 package com.edu.imageconversion.controllers;
 
-import com.edu.imageconversion.dto.ImageConversionRequest;
 import com.edu.imageconversion.services.ImageProcessingService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
-import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import org.springframework.http.HttpHeaders;
