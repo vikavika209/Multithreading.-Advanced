@@ -2,6 +2,7 @@ package com.edu.imageconversion.services;
 
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
+
 import javax.imageio.IIOImage;
 import javax.imageio.ImageIO;
 import javax.imageio.ImageWriteParam;
@@ -15,17 +16,22 @@ import java.io.StringWriter;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
-import org.apache.batik.svggen.SVGGraphics2D;
+import java.util.concurrent.ForkJoinPool;
+import java.util.stream.IntStream;
+
 import org.apache.batik.dom.GenericDOMImplementation;
+import org.apache.batik.svggen.SVGGraphics2D;
 import org.w3c.dom.DOMImplementation;
 import org.w3c.dom.Document;
 
 @Service
 public class ImageProcessingService {
     private final SvgOptimizationService svgOptimizationService;
+    private final ForkJoinPool forkJoinPool;
 
     public ImageProcessingService(SvgOptimizationService svgOptimizationService) {
         this.svgOptimizationService = svgOptimizationService;
+        this.forkJoinPool = new ForkJoinPool();
     }
 
     private Color findDominantColor(BufferedImage image, int margin) {
@@ -168,5 +174,49 @@ public class ImageProcessingService {
             }
         }
         return results;
+    }
+
+    public byte[][] convertImagesParallel(MultipartFile[] files, String format, float quality) throws IOException {
+        return forkJoinPool.submit(() ->
+                IntStream.range(0, files.length)
+                        .parallel()
+                        .mapToObj(i -> {
+                            try {
+                                BufferedImage inputImage = ImageIO.read(files[i].getInputStream());
+                                if (inputImage == null) {
+                                    throw new IOException("Could not open or find the image at index " + i);
+                                }
+
+                                // Убедитесь, что размеры результирующего изображения совпадают с исходными
+                                int width = inputImage.getWidth();
+                                int height = inputImage.getHeight();
+
+                                BufferedImage result = removeBackground(inputImage);
+
+                                // После удаления фона проверим, что размеры совпадают
+                                if (result.getWidth() != width || result.getHeight() != height) {
+                                    BufferedImage correctedResult = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+                                    Graphics2D g = correctedResult.createGraphics();
+                                    g.drawImage(result, 0, 0, width, height, null);
+                                    g.dispose();
+                                    result = correctedResult;
+                                }
+
+                                if ("svg".equalsIgnoreCase(format)) {
+                                    byte[] svgBytes = bufferedImageToSvg(result);
+                                    try {
+                                        return svgOptimizationService.optimizeSvg(svgBytes);
+                                    } catch (Exception e) {
+                                        throw new IOException("SVG optimization failed for image at index " + i, e);
+                                    }
+                                } else {
+                                    return bufferedImageToByteArray(result, format, quality);
+                                }
+                            } catch (IOException e) {
+                                throw new RuntimeException(e);
+                            }
+                        })
+                        .toArray(byte[][]::new)
+        ).join();
     }
 }
