@@ -6,6 +6,8 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -17,6 +19,8 @@ import java.io.IOException;
 @RestController
 @RequestMapping("/api/image")
 public class ImageProcessingController {
+    private static final Logger logger = LogManager.getLogger(ImageProcessingController.class);
+
     private final ImageProcessingService imageProcessingService;
     private final ZipService zipService;
 
@@ -36,6 +40,8 @@ public class ImageProcessingController {
             @RequestPart(value = "files", required = true) MultipartFile[] files,
             @RequestParam("format") String format,
             @RequestParam(value = "quality", defaultValue = "0.8") float quality) {
+        long startTime = System.currentTimeMillis();
+
         try {
             if (!format.equalsIgnoreCase("png") && !format.equalsIgnoreCase("svg")) {
                 return new ResponseEntity<>(HttpStatus.BAD_REQUEST);
@@ -47,11 +53,14 @@ public class ImageProcessingController {
             HttpHeaders headers = new HttpHeaders();
             headers.add(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=converted_images.zip");
 
+            long endTime = System.currentTimeMillis();
+            logger.info("Single-threaded conversion took {} ms", (endTime - startTime));
+
             return ResponseEntity.ok()
                     .headers(headers)
                     .body(zipData);
         } catch (IOException e) {
-            e.printStackTrace();
+            logger.error("Error during conversion and zipping images", e);
             return new ResponseEntity<>(HttpStatus.INTERNAL_SERVER_ERROR);
         }
     }
@@ -67,6 +76,8 @@ public class ImageProcessingController {
             @RequestPart(value = "files", required = true) MultipartFile[] files,
             @RequestParam("format") String format,
             @RequestParam(value = "quality", defaultValue = "0.8") float quality) {
+        long startTime = System.currentTimeMillis();
+
         try {
             if (!format.equalsIgnoreCase("png") && !format.equalsIgnoreCase("svg")) {
                 return new ResponseEntity<>(HttpStatus.BAD_REQUEST);
@@ -78,11 +89,14 @@ public class ImageProcessingController {
             HttpHeaders headers = new HttpHeaders();
             headers.add(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=converted_images_parallel.zip");
 
+            long endTime = System.currentTimeMillis();
+            logger.info("Multi-threaded conversion took {} ms", (endTime - startTime));
+
             return ResponseEntity.ok()
                     .headers(headers)
                     .body(zipData);
         } catch (IOException e) {
-            e.printStackTrace();
+            logger.error("Error during parallel conversion and zipping images", e);
             return new ResponseEntity<>(HttpStatus.INTERNAL_SERVER_ERROR);
         }
     }
