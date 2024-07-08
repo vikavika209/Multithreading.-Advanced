@@ -14,9 +14,12 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.StringWriter;
 import java.nio.charset.StandardCharsets;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.IntStream;
 
 import org.apache.batik.dom.GenericDOMImplementation;
@@ -37,7 +40,7 @@ public class ImageProcessingService {
     private Color findDominantColor(BufferedImage image, int margin) {
         int width = image.getWidth();
         int height = image.getHeight();
-        Map<Color, Integer> colorCount = new HashMap<>();
+        ConcurrentHashMap<Color, AtomicInteger> colorCount = new ConcurrentHashMap<>();
 
         for (int y = 0; y < margin; y++) {
             for (int x = 0; x < margin; x++) {
@@ -47,14 +50,15 @@ public class ImageProcessingService {
                 addColorCount(colorCount, new Color(image.getRGB(width - 1 - x, height - 1 - y)));
             }
         }
+
         return colorCount.entrySet().stream()
-                .max(Map.Entry.comparingByValue())
+                .max(Map.Entry.comparingByValue(Comparator.comparingInt(AtomicInteger::get)))
                 .map(Map.Entry::getKey)
                 .orElse(Color.WHITE);
     }
 
-    private void addColorCount(Map<Color, Integer> colorCount, Color color) {
-        colorCount.put(color, colorCount.getOrDefault(color, 0) + 1);
+    private void addColorCount(ConcurrentHashMap<Color, AtomicInteger> colorCount, Color color) {
+        colorCount.computeIfAbsent(color, k -> new AtomicInteger()).incrementAndGet();
     }
 
     private boolean isBackgroundColor(Color color, Color bgColor, int tolerance) {
