@@ -15,10 +15,11 @@ import java.io.IOException;
 import java.io.StringWriter;
 import java.nio.charset.StandardCharsets;
 import java.util.Comparator;
+import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 import org.apache.batik.dom.GenericDOMImplementation;
@@ -29,11 +30,11 @@ import org.w3c.dom.Document;
 @Service
 public class ImageProcessingService {
     private final SvgOptimizationService svgOptimizationService;
-    private final ForkJoinPool forkJoinPool;
+    private final ExecutorService executorService;
 
     public ImageProcessingService(SvgOptimizationService svgOptimizationService) {
         this.svgOptimizationService = svgOptimizationService;
-        this.forkJoinPool = new ForkJoinPool();
+        this.executorService = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
     }
 
     private Color findDominantColor(BufferedImage image, int margin) {
@@ -180,46 +181,54 @@ public class ImageProcessingService {
     }
 
     public byte[][] convertImagesParallel(MultipartFile[] files, String format, float quality) throws IOException {
-        return forkJoinPool.submit(() ->
-                IntStream.range(0, files.length)
-                        .parallel()
-                        .mapToObj(i -> {
+        List<Future<byte[]>> futures = IntStream.range(0, files.length)
+                .mapToObj(i -> executorService.submit(() -> {
+                    try {
+                        BufferedImage inputImage = ImageIO.read(files[i].getInputStream());
+                        if (inputImage == null) {
+                            throw new IOException("Could not open or find the image at index " + i);
+                        }
+
+                        // Убедитесь, что размеры результирующего изображения совпадают с исходными
+                        int width = inputImage.getWidth();
+                        int height = inputImage.getHeight();
+
+                        BufferedImage result = removeBackground(inputImage);
+
+                        // После удаления фона проверим, что размеры совпадают
+                        if (result.getWidth() != width || result.getHeight() != height) {
+                            BufferedImage correctedResult = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+                            Graphics2D g = correctedResult.createGraphics();
+                            g.drawImage(result, 0, 0, width, height, null);
+                            g.dispose();
+                            result = correctedResult;
+                        }
+
+                        if ("svg".equalsIgnoreCase(format)) {
+                            byte[] svgBytes = bufferedImageToSvg(result);
                             try {
-                                BufferedImage inputImage = ImageIO.read(files[i].getInputStream());
-                                if (inputImage == null) {
-                                    throw new IOException("Could not open or find the image at index " + i);
-                                }
-
-                                // Убедитесь, что размеры результирующего изображения совпадают с исходными
-                                int width = inputImage.getWidth();
-                                int height = inputImage.getHeight();
-
-                                BufferedImage result = removeBackground(inputImage);
-
-                                // После удаления фона проверим, что размеры совпадают
-                                if (result.getWidth() != width || result.getHeight() != height) {
-                                    BufferedImage correctedResult = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
-                                    Graphics2D g = correctedResult.createGraphics();
-                                    g.drawImage(result, 0, 0, width, height, null);
-                                    g.dispose();
-                                    result = correctedResult;
-                                }
-
-                                if ("svg".equalsIgnoreCase(format)) {
-                                    byte[] svgBytes = bufferedImageToSvg(result);
-                                    try {
-                                        return svgOptimizationService.optimizeSvg(svgBytes);
-                                    } catch (Exception e) {
-                                        throw new IOException("SVG optimization failed for image at index " + i, e);
-                                    }
-                                } else {
-                                    return bufferedImageToByteArray(result, format, quality);
-                                }
-                            } catch (IOException e) {
-                                throw new RuntimeException(e);
+                                return svgOptimizationService.optimizeSvg(svgBytes);
+                            } catch (Exception e) {
+                                throw new IOException("SVG optimization failed for image at index " + i, e);
                             }
-                        })
-                        .toArray(byte[][]::new)
-        ).join();
+                        } else {
+                            return bufferedImageToByteArray(result, format, quality);
+                        }
+                    } catch (IOException e) {
+                        throw new RuntimeException(e);
+                    }
+                }))
+                .collect(Collectors.toList());
+
+        byte[][] results = new byte[files.length][];
+        for (int i = 0; i < files.length; i++) {
+            try {
+                results[i] = futures.get(i).get();
+            } catch (InterruptedException | ExecutionException e) {
+                throw new IOException("Error processing image at index " + i, e);
+            }
+        }
+
+        return results;
     }
 }
